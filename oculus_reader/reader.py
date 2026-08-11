@@ -4,6 +4,7 @@ import numpy as np
 import threading
 import time
 import os
+import subprocess
 from ppadb.client import Client as AdbClient
 import sys
 from haptics_trigger import HapticClient
@@ -21,7 +22,10 @@ class OculusReader:
             port = 5555,
             APK_name='com.rail.oculus.teleop',
             print_FPS=False,
-            run=True
+            run=True,
+            adb_server_host=None,
+            adb_server_port=None,
+            adb_serial=None,
         ):
         self.running = False
         self.last_transforms = {}
@@ -33,13 +37,22 @@ class OculusReader:
         self.port = port
         self.APK_name = APK_name
         self.print_FPS = print_FPS
+        self.adb_server_host = adb_server_host or os.environ.get(
+            'OCULUS_ADB_SERVER_HOST', '127.0.0.1')
+        self.adb_server_port = int(
+            adb_server_port or os.environ.get('OCULUS_ADB_SERVER_PORT', '5037'))
+        self.adb_serial = adb_serial or os.environ.get('OCULUS_ADB_SERIAL')
         if self.print_FPS:
             self.fps_counter = FPSCounter()
 
         self.device = self.get_device()
         self.install(verbose=False)
 
-        self.haptic_client = HapticClient()
+        self.haptic_client = HapticClient(
+            adb_serial=self.device.serial,
+            adb_server_host=self.adb_server_host,
+            adb_server_port=self.adb_server_port,
+        )
         self.haptic_amp_l = 0.0
         self.haptic_amp_r = 0.0
         # create two watchdogs that reset the haptic amplitudes to zero after some time
@@ -56,25 +69,43 @@ class OculusReader:
     def run(self):
         self.running = True
         self.device.shell('am start -n "com.rail.oculus.teleop/com.rail.oculus.teleop.MainActivity" -a android.intent.action.MAIN -c android.intent.category.LAUNCHER')
-        self.thread = threading.Thread(target=self.device.shell, args=("logcat -T 0", self.read_logcat_by_line))
+        self.thread = threading.Thread(
+            target=self.device.shell,
+            args=("logcat -T 0", self.read_logcat_by_line),
+            daemon=True,
+        )
         self.thread.start()
 
     def stop(self):
         self.running = False
+        self.haptic_amp_l = 0.0
+        self.haptic_amp_r = 0.0
+        if hasattr(self, 'haptic_client'):
+            self.haptic_client.close()
         if hasattr(self, 'thread'):
-            self.thread.join()
+            self.thread.join(timeout=2.0)
+
+    def _run_adb(self, *args):
+        cmd = [
+            'adb',
+            '-H', self.adb_server_host,
+            '-P', str(self.adb_server_port),
+        ]
+        if self.adb_serial:
+            cmd += ['-s', self.adb_serial]
+        return subprocess.run(cmd + list(args), check=False)
 
     def get_network_device(self, client, retry=0):
         try:
             client.remote_connect(self.ip_address, self.port)
         except RuntimeError:
-            os.system('adb devices')
+            self._run_adb('devices')
             client.remote_connect(self.ip_address, self.port)
         device = client.device(self.ip_address + ':' + str(self.port))
 
         if device is None:
             if retry==1:
-                os.system('adb tcpip ' + str(self.port))
+                self._run_adb('tcpip', str(self.port))
             if retry==2:
                 eprint('Make sure that device is running and is available at the IP address specified as the OculusReader argument `ip_address`.')
                 eprint('Currently provided IP address:', self.ip_address)
@@ -88,18 +119,31 @@ class OculusReader:
         try:
             devices = client.devices()
         except RuntimeError:
-            os.system('adb devices')
+            self._run_adb('devices')
             devices = client.devices()
-        for device in devices:
-            if device.serial.count('.') < 3:
-                return device
+
+        usb_devices = [device for device in devices if device.serial.count('.') < 3]
+        if self.adb_serial:
+            for device in usb_devices:
+                if device.serial == self.adb_serial:
+                    return device
+            raise RuntimeError(
+                f'ADB device {self.adb_serial!r} not found on '
+                f'{self.adb_server_host}:{self.adb_server_port}.')
+
+        if len(usb_devices) == 1:
+            return usb_devices[0]
+        if len(usb_devices) > 1:
+            serials = ', '.join(device.serial for device in usb_devices)
+            raise RuntimeError(
+                'Multiple USB ADB devices found. Set OCULUS_ADB_SERIAL to one '
+                f'of: {serials}')
         eprint('Device not found. Make sure that device is running and is connected over USB')
         eprint('Run `adb devices` to verify that the device is visible.')
-        exit(1)
+        raise RuntimeError('No USB ADB device found.')
 
     def get_device(self):
-        # Default is "127.0.0.1" and 5037
-        client = AdbClient(host="127.0.0.1", port=5037)
+        client = AdbClient(host=self.adb_server_host, port=self.adb_server_port)
         if self.ip_address is not None:
             return self.get_network_device(client)
         else:
@@ -196,6 +240,8 @@ class OculusReader:
         while self.running:
             try:
                 line = file_obj.readline().strip()
+                if not self.running:
+                    break
                 data = self.extract_data(line)
                 if data:
                     transforms, buttons = OculusReader.process_data(data)

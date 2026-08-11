@@ -71,6 +71,21 @@ If you intend to use the precompiled APK with the predefined behavior, where the
 2. Run the exemplary file: `python oculus_reader/reader.py`
 3. (optionally) If ROS is installed on your machine, the current transformation can be visualized using the script [visualize_oculus_transforms.py](oculus_reader/visualize_oculus_transforms.py).
 
+When more than one ADB server or USB device is present, pin both the server and
+the Quest serial before starting the reader. The same target is used for input,
+APK operations, and haptics:
+
+```bash
+export OCULUS_ADB_SERVER_HOST=127.0.0.1
+export OCULUS_ADB_SERVER_PORT=5038
+export OCULUS_ADB_SERIAL=QUEST_SERIAL
+python oculus_reader/reader.py
+```
+
+If multiple USB devices are visible and `OCULUS_ADB_SERIAL` is not set, the
+reader stops instead of selecting a device implicitly. On shutdown it sends an
+explicit zero-amplitude haptic command before closing the active connection.
+
 ### Communication over the network (more portable)
 
 1. Make sure that Oculus Quest is connected to the same network as the computer.

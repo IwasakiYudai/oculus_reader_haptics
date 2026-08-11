@@ -11,7 +11,7 @@ from std_srvs.srv import SetBool,Trigger
 from std_msgs.msg import Float64MultiArray
 
 # For spinning
-from rclpy.executors import SingleThreadedExecutor
+from rclpy.executors import ExternalShutdownException, SingleThreadedExecutor
 from threading import Thread
 
 import scipy
@@ -42,16 +42,17 @@ class OculusReaderNode(Node):
         self.button_count_poll= 0
         self.button_info_init = False
         self.button_triggered_dict = {}
+        self.running = True
 
         # Create a thread to run the main loop
         self.rate = self.create_rate(70)  # 90 Hz
-        self.thread = Thread(target=self.loop)
+        self.thread = Thread(target=self.loop, daemon=True)
         self.thread.start()
 
         
 
     def loop(self):
-        while rclpy.ok():
+        while self.running and rclpy.ok():
             current_time = self.clock.now()
             self.last_time = current_time
             transformations, buttons = self.oculus_reader.get_transformations_and_buttons()
@@ -75,6 +76,11 @@ class OculusReaderNode(Node):
             else:
                 self.get_logger().warning('Invalid transform detected, not publishing TF.')  
             self.rate.sleep()
+
+    def stop(self):
+        self.running = False
+        self.oculus_reader.stop()
+        self.thread.join(timeout=2.0)
 
     def button_funcs(self, buttons):
         # early return if no A or X button info
@@ -280,11 +286,13 @@ def main():
     executor.add_node(node)
     try:
         executor.spin()
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        node.stop()
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

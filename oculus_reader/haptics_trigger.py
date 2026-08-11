@@ -11,17 +11,26 @@ class HapticClient:
     PC ->(adb forward)-> Device:7777 -> App(HapticServer)
     """
     def __init__(self, pc_port: int = 45043, device_port: int = 7777,
-                 adb_serial: Optional[str] = None, connect_timeout=3.0):
+                 adb_serial: Optional[str] = None,
+                 adb_server_host: str = "127.0.0.1",
+                 adb_server_port: int = 5037,
+                 connect_timeout=3.0):
         self.addr = ("127.0.0.1", pc_port)
         self.timeout = float(connect_timeout)
         self.pc_port = pc_port
         self.device_port = device_port
         self.adb_serial = adb_serial
+        self.adb_server_host = adb_server_host
+        self.adb_server_port = int(adb_server_port)
         self.sock: Optional[socket.socket] = None
 
     # ---------- ADB helpers ----------
     def _adb(self, *args, check=True, capture_output=True, text=True):
-        cmd = ["adb"]
+        cmd = [
+            "adb",
+            "-H", self.adb_server_host,
+            "-P", str(self.adb_server_port),
+        ]
         if self.adb_serial:
             cmd += ["-s", self.adb_serial]
         cmd += list(args)
@@ -77,6 +86,15 @@ class HapticClient:
 
     def close(self):
         if self.sock:
+            zero = (json.dumps({
+                "type": "simple",
+                "amp_l": 0.0,
+                "amp_r": 0.0,
+            }) + "\n").encode("utf-8")
+            try:
+                self.sock.sendall(zero)
+            except OSError:
+                pass
             try: self.sock.shutdown(socket.SHUT_RDWR)
             except Exception: pass
             try: self.sock.close()
