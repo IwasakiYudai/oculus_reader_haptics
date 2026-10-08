@@ -30,6 +30,12 @@ class OculusReader:
         self.running = False
         self.last_transforms = {}
         self.last_buttons = {}
+        # Host-side acquisition metadata.  The APK protocol has no source
+        # timestamp, so this sequence and monotonic timestamp identify actual
+        # logcat samples.  Consumers must not turn repeated reads of
+        # last_transforms into apparently fresh tracking data.
+        self.last_sample_sequence = 0
+        self.last_sample_monotonic = None
         self._lock = threading.Lock()
         self.tag = 'wE9ryARX'
 
@@ -235,6 +241,22 @@ class OculusReader:
         with self._lock:
             return self.last_transforms, self.last_buttons
 
+    def get_snapshot(self):
+        """Return the latest controller sample and host acquisition metadata.
+
+        ``last_sample_sequence`` changes only when a new APK/logcat record is
+        parsed.  This preserves the existing reader API while allowing ROS
+        bridges to publish each physical sample once instead of continuously
+        re-stamping stale data.
+        """
+        with self._lock:
+            return (
+                self.last_transforms,
+                self.last_buttons,
+                self.last_sample_sequence,
+                self.last_sample_monotonic,
+            )
+
     def read_logcat_by_line(self, connection):
         file_obj = connection.socket.makefile()
         while self.running:
@@ -247,6 +269,8 @@ class OculusReader:
                     transforms, buttons = OculusReader.process_data(data)
                     with self._lock:
                         self.last_transforms, self.last_buttons = transforms, buttons
+                        self.last_sample_sequence += 1
+                        self.last_sample_monotonic = time.monotonic()
                     if self.print_FPS:
                         self.fps_counter.getAndPrintFPS()
                 

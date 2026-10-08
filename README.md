@@ -86,6 +86,38 @@ If multiple USB devices are visible and `OCULUS_ADB_SERIAL` is not set, the
 reader stops instead of selecting a device implicitly. On shutdown it sends an
 explicit zero-amplitude haptic command before closing the active connection.
 
+### ROS 2 sample contract
+
+`oculus_reader/visualize_oculus_transforms_ros2.py` publishes each newly
+acquired APK/logcat sample once. Cached transforms are not re-stamped as fresh.
+In addition to the existing `oculus_base -> oculus_l/r` TFs it publishes:
+
+- `/oculus/left/pose`, `/oculus/right/pose` (`geometry_msgs/PoseStamped`)
+- `/oculus/left/input`, `/oculus/right/input` (`sensor_msgs/Joy`)
+- `/oculus/left/pose_valid`, `/oculus/right/pose_valid` (`std_msgs/Bool`)
+
+Joy axes are `[stick_x, stick_y, index_trigger, grip_trigger]`. Buttons are
+`[X, Y, LJ, LG, LTr]` on the left and `[A, B, RJ, RG, RTr]` on the right.
+Legacy dataset/service and direct gripper side effects are disabled by default.
+Dataset and global `/teleop_start` calls require
+`enable_legacy_dataset_actions:=true` or
+`enable_legacy_robot_actions:=true`. Gripper output is enabled independently
+with `enable_gripper_actions:=true`. With
+`index_trigger_toggle_gripper:=true`, each index trigger toggles only its
+same-side gripper between `0.8` and `0.0`; the side grips remain available as
+arm deadman inputs and do not command the grippers.
+
+The bridge publishes camera-relative ROS coordinates using one change of basis
+for the complete pose: Quest `(+X right, +Y up, -Z forward)` becomes ROS
+`(+X forward, +Y left, +Z up)`. Translation uses `C p` and rotation uses
+`C R C^T`; no separate empirical quaternion offset is applied.
+
+For a headset mounted upside down while its cameras keep the same forward
+direction, start the ROS 2 bridge with
+`--ros-args -p headset_mount_roll_deg:=180.0`. This applies a 180-degree
+calibration about ROS +X (camera forward) to the complete parent-frame pose;
+the default is `0.0` for an upright headset.
+
 ### Communication over the network (more portable)
 
 1. Make sure that Oculus Quest is connected to the same network as the computer.
